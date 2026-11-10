@@ -300,13 +300,13 @@ public class StreamSettings extends Activity {
                 // Balanced: sharper picture with low latency
                 editor.putString("frame_pacing", "balanced");
                 editor.putBoolean(PreferenceConfiguration.GFN_UPSCALING_PREF_STRING, true);
-                editor.putInt(PreferenceConfiguration.GFN_SHARPNESS_PREF_STRING, 25);
+                editor.putInt(PreferenceConfiguration.GFN_SHARPNESS_PREF_STRING, 10);
             }
             else {
                 // Quality: best picture, smoothest playback
                 editor.putString("frame_pacing", "smoothness");
                 editor.putBoolean(PreferenceConfiguration.GFN_UPSCALING_PREF_STRING, true);
-                editor.putInt(PreferenceConfiguration.GFN_SHARPNESS_PREF_STRING, 35);
+                editor.putInt(PreferenceConfiguration.GFN_SHARPNESS_PREF_STRING, 15);
             }
 
             editor.apply();

@@ -64,7 +64,7 @@
         <com.limelight.preferences.SeekBarPreference
             android:key="seekbar_gfn_sharpness"
             android:dependency="checkbox_gfn_upscaling"
-            android:defaultValue="25"
+            android:defaultValue="10"
             android:max="100"
             android:summary="@string/summary_seekbar_gfn_sharpness"
             android:text="@string/suffix_seekbar_gfn_sharpness"

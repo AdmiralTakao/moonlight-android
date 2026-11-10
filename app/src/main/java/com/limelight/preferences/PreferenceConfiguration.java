@@ -52,7 +52,7 @@ public class PreferenceConfiguration {
     static final String GFN_UPSCALING_PREF_STRING = "checkbox_gfn_upscaling";
     static final String GFN_SHARPNESS_PREF_STRING = "seekbar_gfn_sharpness";
     static final boolean DEFAULT_GFN_UPSCALING = false;
-    static final int DEFAULT_GFN_SHARPNESS = 25;
+    static final int DEFAULT_GFN_SHARPNESS = 10;
     private static final String ENABLE_PIP_PREF_STRING = "checkbox_enable_pip";
     private static final String ENABLE_PERF_OVERLAY_STRING = "checkbox_enable_perf_overlay";
     private static final String BIND_ALL_USB_STRING = "checkbox_usb_bind_all";
