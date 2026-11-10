@@ -26,6 +26,7 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
+import android.widget.Toast;
 
 import com.limelight.LimeLog;
 import com.limelight.PcView;
@@ -247,6 +248,81 @@ public class StreamSettings extends Activity {
             // Update the preference with the new list
             pref.setEntries(entries);
             pref.setEntryValues(entryValues);
+        }
+
+        // GFN fork: GeForce-NOW-style quick presets
+        private void setupGfnPreset(String key, final int preset) {
+            Preference pref = findPreference(key);
+            if (pref == null) {
+                return;
+            }
+
+            pref.setOnPreferenceClickListener(new Preference.OnPreferenceClickListener() {
+                @Override
+                public boolean onPreferenceClick(Preference preference) {
+                    applyGfnPreset(preset, preference.getTitle());
+                    return true;
+                }
+            });
+        }
+
+        private void applyGfnPreset(int preset, CharSequence name) {
+            SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(getActivity());
+            SharedPreferences.Editor editor = prefs.edit();
+
+            if (preset == 0) {
+                // Competitive: highest frame rate offered on this device, lowest latency, no post-processing
+                ListPreference fpsPref = (ListPreference) findPreference(PreferenceConfiguration.FPS_PREF_STRING);
+                String bestFps = null;
+                int bestFpsValue = 0;
+                if (fpsPref != null) {
+                    for (CharSequence value : fpsPref.getEntryValues()) {
+                        try {
+                            int fps = Integer.parseInt(value.toString());
+                            if (fps > bestFpsValue) {
+                                bestFpsValue = fps;
+                                bestFps = value.toString();
+                            }
+                        } catch (NumberFormatException ignored) {
+                        }
+                    }
+                }
+                if (bestFps != null) {
+                    String res = prefs.getString(PreferenceConfiguration.RESOLUTION_PREF_STRING, PreferenceConfiguration.DEFAULT_RESOLUTION);
+                    editor.putString(PreferenceConfiguration.FPS_PREF_STRING, bestFps);
+                    editor.putInt(PreferenceConfiguration.BITRATE_PREF_STRING, PreferenceConfiguration.getDefaultBitrate(res, bestFps));
+                }
+                editor.putString("frame_pacing", "latency");
+                editor.putBoolean(PreferenceConfiguration.GFN_UPSCALING_PREF_STRING, false);
+                editor.putInt(PreferenceConfiguration.GFN_SHARPNESS_PREF_STRING, 0);
+            }
+            else if (preset == 1) {
+                // Balanced: sharper picture with low latency
+                editor.putString("frame_pacing", "balanced");
+                editor.putBoolean(PreferenceConfiguration.GFN_UPSCALING_PREF_STRING, true);
+                editor.putInt(PreferenceConfiguration.GFN_SHARPNESS_PREF_STRING, 25);
+            }
+            else {
+                // Quality: best picture, smoothest playback
+                editor.putString("frame_pacing", "smoothness");
+                editor.putBoolean(PreferenceConfiguration.GFN_UPSCALING_PREF_STRING, true);
+                editor.putInt(PreferenceConfiguration.GFN_SHARPNESS_PREF_STRING, 35);
+            }
+
+            editor.apply();
+
+            Toast.makeText(getActivity(), getString(R.string.toast_gfn_preset_applied, name), Toast.LENGTH_SHORT).show();
+
+            // Reload the settings UI so all preferences show their new values
+            new Handler().post(new Runnable() {
+                @Override
+                public void run() {
+                    StreamSettings settingsActivity = (StreamSettings) SettingsFragment.this.getActivity();
+                    if (settingsActivity != null) {
+                        settingsActivity.reloadSettings();
+                    }
+                }
+            });
         }
 
         private void resetBitrateToDefault(SharedPreferences prefs, String res, String fps) {
@@ -645,6 +721,11 @@ public class StreamSettings extends Activity {
                     return true;
                 }
             });
+            // GFN fork: quick presets
+            setupGfnPreset("gfn_preset_competitive", 0);
+            setupGfnPreset("gfn_preset_balanced", 1);
+            setupGfnPreset("gfn_preset_quality", 2);
+
             findPreference(PreferenceConfiguration.FPS_PREF_STRING).setOnPreferenceChangeListener(new Preference.OnPreferenceChangeListener() {
                 @Override
                 public boolean onPreferenceChange(Preference preference, Object newValue) {

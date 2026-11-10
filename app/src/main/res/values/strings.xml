@@ -303,4 +303,19 @@
     <string name="analogscroll_none">None (both sticks move the mouse)</string>
     <string name="analogscroll_right">Right analog stick</string>
     <string name="analogscroll_left">Left analog stick</string>
+
+    <!-- GFN fork (German only) -->
+    <string name="category_gfn_settings">GFN-Features (Fork)</string>
+    <string name="title_gfn_preset_competitive">Profil: Competitive</string>
+    <string name="summary_gfn_preset_competitive">Minimale Latenz: höchste FPS, Frame-Pacing \"Niedrigste Latenz\", keine Nachbearbeitung</string>
+    <string name="title_gfn_preset_balanced">Profil: Balanced</string>
+    <string name="summary_gfn_preset_balanced">Scharfes Bild bei niedriger Latenz: FSR-Upscaling, Schärfe 25 Prozent, ausgewogenes Frame-Pacing</string>
+    <string name="title_gfn_preset_quality">Profil: Qualität</string>
+    <string name="summary_gfn_preset_quality">Bestes Bild: FSR-Upscaling, Schärfe 35 Prozent, flüssigste Bildausgabe</string>
+    <string name="toast_gfn_preset_applied">Profil angewendet: %1$s</string>
+    <string name="title_checkbox_gfn_upscaling">Bildverbesserung: FSR-Upscaling + Schärfe (experimentell)</string>
+    <string name="summary_checkbox_gfn_upscaling">Rechnet den Stream mit AMD FSR auf die Bildschirmauflösung hoch und schärft nach. Nicht zusammen mit HDR. Kostet etwas GPU-Leistung und ca. 1 Frame Latenz.</string>
+    <string name="title_seekbar_gfn_sharpness">Bildschärfe</string>
+    <string name="summary_seekbar_gfn_sharpness">Stärke der Nachschärfung (0 = aus)</string>
+    <string name="suffix_seekbar_gfn_sharpness">%</string>
 </resources>

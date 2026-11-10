@@ -84,8 +84,8 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix ".debug"
-            resValue "string", "app_label", "Moonlight (Debug)"
-            resValue "string", "app_label_root", "Moonlight (Root Debug)"
+            resValue "string", "app_label", "Moonlight GFN (Debug)"
+            resValue "string", "app_label_root", "Moonlight GFN (Root Debug)"
         }
         release {
             // To whomever is releasing/using an APK in release mode with
@@ -119,8 +119,12 @@ android {
             //
             // TL;DR: Leave the following line alone!
             applicationIdSuffix ".unofficial"
-            resValue "string", "app_label", "Moonlight"
-            resValue "string", "app_label_root", "Moonlight (Root)"
+            resValue "string", "app_label", "Moonlight GFN"
+            resValue "string", "app_label_root", "Moonlight GFN (Root)"
+
+            // GFN fork: sign release builds with the (CI-cached) debug key so the APK
+            // can be sideloaded and updated in place.
+            signingConfig signingConfigs.debug
 
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'

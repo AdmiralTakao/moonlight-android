@@ -273,6 +273,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         this.renderTarget = renderTarget;
     }
 
+    // GFN fork: decode into this surface (e.g. the GL post-processing input) instead of
+    // directly into the SurfaceView when set.
+    private android.view.Surface renderSurfaceOverride;
+
+    public void setRenderSurfaceOverride(android.view.Surface surface) {
+        this.renderSurfaceOverride = surface;
+    }
+
     public MediaCodecDecoderRenderer(Activity activity, PreferenceConfiguration prefs,
                                      CrashListener crashListener, int consecutiveCrashCount,
                                      boolean meteredData, boolean requestedHdr,
@@ -516,7 +524,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         LimeLog.info("Configuring with format: "+format);
 
-        videoDecoder.configure(format, renderTarget.getSurface(), null, 0);
+        videoDecoder.configure(format, renderSurfaceOverride != null ? renderSurfaceOverride : renderTarget.getSurface(), null, 0);
 
         configuredFormat = format;
 

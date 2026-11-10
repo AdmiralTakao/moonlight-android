@@ -47,6 +47,12 @@ public class PreferenceConfiguration {
     private static final String SHOW_GUIDE_BUTTON_PREF_STRING = "checkbox_show_guide_button";
     private static final String LEGACY_DISABLE_FRAME_DROP_PREF_STRING = "checkbox_disable_frame_drop";
     private static final String ENABLE_HDR_PREF_STRING = "checkbox_enable_hdr";
+
+    // GFN fork
+    static final String GFN_UPSCALING_PREF_STRING = "checkbox_gfn_upscaling";
+    static final String GFN_SHARPNESS_PREF_STRING = "seekbar_gfn_sharpness";
+    static final boolean DEFAULT_GFN_UPSCALING = false;
+    static final int DEFAULT_GFN_SHARPNESS = 25;
     private static final String ENABLE_PIP_PREF_STRING = "checkbox_enable_pip";
     private static final String ENABLE_PERF_OVERLAY_STRING = "checkbox_enable_perf_overlay";
     private static final String BIND_ALL_USB_STRING = "checkbox_usb_bind_all";
@@ -148,6 +154,10 @@ public class PreferenceConfiguration {
     public boolean touchscreenTrackpad;
     public MoonBridge.AudioConfiguration audioConfiguration;
     public int framePacing;
+
+    // GFN fork: OpenGL post-processing (FSR upscaling + RCAS sharpening)
+    public boolean gfnUpscaling;
+    public int gfnSharpness; // 0-100
     public boolean absoluteMouseMode;
     public boolean enableAudioFx;
     public boolean reduceRefreshRate;
@@ -561,6 +571,8 @@ public class PreferenceConfiguration {
 
         config.videoFormat = getVideoFormatValue(context);
         config.framePacing = getFramePacingValue(context);
+        config.gfnUpscaling = prefs.getBoolean(GFN_UPSCALING_PREF_STRING, DEFAULT_GFN_UPSCALING);
+        config.gfnSharpness = Math.max(0, Math.min(prefs.getInt(GFN_SHARPNESS_PREF_STRING, DEFAULT_GFN_SHARPNESS), 100));
 
         config.analogStickForScrolling = getAnalogStickForScrollingValue(context);
 

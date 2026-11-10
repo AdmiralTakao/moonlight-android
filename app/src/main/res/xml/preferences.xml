@@ -41,6 +41,35 @@
             android:title="@string/title_checkbox_stretch_video"
             android:defaultValue="false" />
     </PreferenceCategory>
+    <!-- GFN fork: GeForce-NOW-style features -->
+    <PreferenceCategory android:title="@string/category_gfn_settings"
+        android:key="category_gfn_settings">
+        <Preference
+            android:key="gfn_preset_competitive"
+            android:title="@string/title_gfn_preset_competitive"
+            android:summary="@string/summary_gfn_preset_competitive" />
+        <Preference
+            android:key="gfn_preset_balanced"
+            android:title="@string/title_gfn_preset_balanced"
+            android:summary="@string/summary_gfn_preset_balanced" />
+        <Preference
+            android:key="gfn_preset_quality"
+            android:title="@string/title_gfn_preset_quality"
+            android:summary="@string/summary_gfn_preset_quality" />
+        <CheckBoxPreference
+            android:key="checkbox_gfn_upscaling"
+            android:title="@string/title_checkbox_gfn_upscaling"
+            android:summary="@string/summary_checkbox_gfn_upscaling"
+            android:defaultValue="false" />
+        <com.limelight.preferences.SeekBarPreference
+            android:key="seekbar_gfn_sharpness"
+            android:dependency="checkbox_gfn_upscaling"
+            android:defaultValue="25"
+            android:max="100"
+            android:summary="@string/summary_seekbar_gfn_sharpness"
+            android:text="@string/suffix_seekbar_gfn_sharpness"
+            android:title="@string/title_seekbar_gfn_sharpness"/>
+    </PreferenceCategory>
     <PreferenceCategory android:title="@string/category_audio_settings">
         <ListPreference
             android:key="list_audio_config"

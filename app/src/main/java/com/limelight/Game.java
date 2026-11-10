@@ -14,6 +14,7 @@ import com.limelight.binding.input.evdev.EvdevListener;
 import com.limelight.binding.input.touch.TouchContext;
 import com.limelight.binding.input.virtual_controller.VirtualController;
 import com.limelight.binding.video.CrashListener;
+import com.limelight.binding.video.GlUpscaleRenderer;
 import com.limelight.binding.video.MediaCodecDecoderRenderer;
 import com.limelight.binding.video.MediaCodecHelper;
 import com.limelight.binding.video.PerfOverlayListener;
@@ -148,6 +149,9 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private TextView performanceOverlayView;
 
     private MediaCodecDecoderRenderer decoderRenderer;
+
+    // GFN fork: optional OpenGL post-processing (FSR upscaling + sharpening)
+    private GlUpscaleRenderer glUpscaleRenderer;
     private boolean reportedCrash;
 
     private WifiManager.WifiLock highPerfWifiLock;
@@ -951,8 +955,12 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         }
 
         if (prefConfig.stretchVideo || aspectRatioMatch) {
-            // Set the surface to the size of the video
-            streamView.getHolder().setFixedSize(prefConfig.width, prefConfig.height);
+            // GFN fork: With GL post-processing, the surface stays at display resolution
+            // so we can upscale the video ourselves instead of the display hardware.
+            if (!isGfnPostProcessingRequested()) {
+                // Set the surface to the size of the video
+                streamView.getHolder().setFixedSize(prefConfig.width, prefConfig.height);
+            }
         }
         else {
             // Set the surface to scale based on the aspect ratio of the stream
@@ -1058,6 +1066,12 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
         // Destroy the capture provider
         inputCaptureProvider.destroy();
+
+        // GFN fork: release GL post-processing
+        if (glUpscaleRenderer != null) {
+            glUpscaleRenderer.release();
+            glUpscaleRenderer = null;
+        }
     }
 
     @Override
@@ -2502,10 +2516,20 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         controllerHandler.handleSetControllerLED(controllerNumber, r, g, b);
     }
 
+    // GFN fork: GL post-processing can't handle HDR output, so it's only used for SDR streams
+    private boolean isGfnPostProcessingRequested() {
+        return prefConfig.gfnUpscaling && !prefConfig.enableHdr;
+    }
+
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
         if (!surfaceCreated) {
             throw new IllegalStateException("Surface changed before creation!");
+        }
+
+        if (attemptedConnection && glUpscaleRenderer != null) {
+            // GFN fork: the output size changed (rotation, PiP, etc.)
+            glUpscaleRenderer.setOutputSize(width, height);
         }
 
         if (!attemptedConnection) {
@@ -2513,6 +2537,20 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
             // Update GameManager state to indicate we're "loading" while connecting
             UiHelper.notifyStreamConnecting(Game.this);
+
+            // GFN fork: route decoded frames through the GL post-processing renderer if enabled
+            if (isGfnPostProcessingRequested()) {
+                glUpscaleRenderer = GlUpscaleRenderer.create(holder.getSurface(), width, height,
+                        prefConfig.width, prefConfig.height,
+                        prefConfig.gfnSharpness / 100.0f,
+                        prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY);
+                if (glUpscaleRenderer != null) {
+                    decoderRenderer.setRenderSurfaceOverride(glUpscaleRenderer.getInputSurface());
+                }
+                else {
+                    LimeLog.warning("GFN: GL post-processing unavailable, rendering directly");
+                }
+            }
 
             decoderRenderer.setRenderTarget(holder);
             conn.start(new AndroidAudioRenderer(Game.this, prefConfig.enableAudioFx),
@@ -2574,6 +2612,11 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             if (connected) {
                 stopConnection();
             }
+        }
+
+        // GFN fork: stop drawing into the surface before it goes away
+        if (glUpscaleRenderer != null) {
+            glUpscaleRenderer.releaseOutput();
         }
     }
 
