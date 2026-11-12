@@ -7,6 +7,7 @@ import android.os.Build;
 import android.preference.PreferenceManager;
 import android.view.Display;
 
+import com.limelight.binding.video.GlUpscaleRenderer;
 import com.limelight.nvstream.jni.MoonBridge;
 
 public class PreferenceConfiguration {
@@ -51,6 +52,8 @@ public class PreferenceConfiguration {
     // GFN fork
     static final String GFN_UPSCALING_PREF_STRING = "checkbox_gfn_upscaling";
     static final String GFN_SHARPNESS_PREF_STRING = "seekbar_gfn_sharpness";
+    static final String GFN_UPSCALER_PREF_STRING = "list_gfn_upscaler";
+    static final String DEFAULT_GFN_UPSCALER = "mwsr";
     static final boolean DEFAULT_GFN_UPSCALING = false;
     static final int DEFAULT_GFN_SHARPNESS = 10;
     private static final String ENABLE_PIP_PREF_STRING = "checkbox_enable_pip";
@@ -158,6 +161,7 @@ public class PreferenceConfiguration {
     // GFN fork: OpenGL post-processing (FSR upscaling + RCAS sharpening)
     public boolean gfnUpscaling;
     public int gfnSharpness; // 0-100
+    public int gfnUpscaler; // GlUpscaleRenderer.UPSCALER_*
     public boolean absoluteMouseMode;
     public boolean enableAudioFx;
     public boolean reduceRefreshRate;
@@ -573,6 +577,8 @@ public class PreferenceConfiguration {
         config.framePacing = getFramePacingValue(context);
         config.gfnUpscaling = prefs.getBoolean(GFN_UPSCALING_PREF_STRING, DEFAULT_GFN_UPSCALING);
         config.gfnSharpness = Math.max(0, Math.min(prefs.getInt(GFN_SHARPNESS_PREF_STRING, DEFAULT_GFN_SHARPNESS), 100));
+        config.gfnUpscaler = "fsr".equals(prefs.getString(GFN_UPSCALER_PREF_STRING, DEFAULT_GFN_UPSCALER)) ?
+                GlUpscaleRenderer.UPSCALER_FSR : GlUpscaleRenderer.UPSCALER_MWSR;
 
         config.analogStickForScrolling = getAnalogStickForScrollingValue(context);
 

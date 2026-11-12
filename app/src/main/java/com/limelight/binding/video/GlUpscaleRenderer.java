@@ -1,5 +1,6 @@
 package com.limelight.binding.video;
 
+import android.content.res.AssetManager;
 import android.graphics.SurfaceTexture;
 import android.opengl.EGL14;
 import android.opengl.EGLConfig;
@@ -9,6 +10,7 @@ import android.opengl.EGLExt;
 import android.opengl.EGLSurface;
 import android.opengl.GLES11Ext;
 import android.opengl.GLES20;
+import android.opengl.Matrix;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Process;
@@ -16,9 +18,13 @@ import android.view.Surface;
 
 import com.limelight.LimeLog;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -31,8 +37,12 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   1. External OES texture -> RGBA texture at stream resolution
  *   2. AMD FSR 1 EASU upscaling to the output resolution (only when upscaling)
  *   3. AMD FSR 1 RCAS sharpening into the window surface
+ * or, with MWSR, two passes:
+ *   1. External OES texture -> RGBA texture at stream resolution (first row = top)
+ *   2. MWSR upscale or reduction straight into the window surface
  *
  * FSR 1 is Copyright (c) 2021 Advanced Micro Devices, Inc. (MIT license).
+ * MWSR is Copyright (c) 2026 Bruno Martin (MIT license, see assets/mwsr/LICENSE-MWSR).
  */
 public class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableListener {
     private static final String COPY_VERTEX_SHADER =
@@ -230,10 +240,34 @@ public class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableListene
             0, 0, 0, 1,
     };
 
+    // Maps (s, t) to (s, 1 - t): MWSR's vertex shader expects the texture's first row to be
+    // the top of the picture, while GL renders the bottom row first (column-major matrix)
+    private static final float[] FLIP_Y_MATRIX = {
+            1, 0, 0, 0,
+            0, -1, 0, 0,
+            0, 0, 1, 0,
+            0, 1, 0, 1,
+    };
+
+    /** Upscaler choices of the "list_gfn_upscaler" preference. */
+    public static final int UPSCALER_MWSR = 0;
+    public static final int UPSCALER_FSR = 1;
+
+    private static final String[] MWSR_UNIFORMS = {
+            "uTexelScale", "uDimsAcross", "uKernel", "uZone", "uZoneBonus", "uBound"
+    };
+
     private final int streamWidth;
     private final int streamHeight;
     private final float sharpness;
     private final boolean lowLatency;
+
+    // MWSR shader sources (null if MWSR isn't used), read from the assets on the caller's thread
+    private final String mwsrVertexSource;
+    private final String mwsrUpSource, mwsrDown4Source, mwsrDown9Source, mwsrDown16Source;
+
+    // Shown in the performance overlay; written on the GL thread
+    private volatile String statusText = "Bildverbesserung: wird vorbereitet";
 
     private final HandlerThread glThread;
     private final Handler glHandler;
@@ -249,6 +283,10 @@ public class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableListene
     private Surface inputSurface;
     private int oesTexture;
     private int copyProgram, easuProgram, rcasProgram, copyRgbProgram;
+    private int mwsrUpProgram, mwsrDown4Program, mwsrDown9Program, mwsrDown16Program;
+    private final float[] flippedTexMatrix = new float[16];
+    private float[] mwsrUniforms;
+    private int mwsrUniformsOutW, mwsrUniformsOutH;
     private int sourceTexture, sourceFbo;
     private int upscaledTexture, upscaledFbo;
     private int upscaledWidth, upscaledHeight;
@@ -258,11 +296,31 @@ public class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableListene
     private boolean released;
     private boolean loggedMode;
 
-    private GlUpscaleRenderer(int streamWidth, int streamHeight, float sharpness, boolean lowLatency) {
+    private GlUpscaleRenderer(int streamWidth, int streamHeight, float sharpness, boolean lowLatency,
+                              AssetManager assets, boolean useMwsr) {
         this.streamWidth = streamWidth;
         this.streamHeight = streamHeight;
         this.sharpness = Math.max(0.0f, Math.min(sharpness, 1.0f));
         this.lowLatency = lowLatency;
+
+        String vs = null, up = null, d4 = null, d9 = null, d16 = null;
+        if (useMwsr && assets != null) {
+            try {
+                vs = readAsset(assets, "mwsr/mwsr.vert");
+                up = readAsset(assets, "mwsr/mwsr-up.frag");
+                d4 = readAsset(assets, "mwsr/mwsr-down-4.frag");
+                d9 = readAsset(assets, "mwsr/mwsr-down-9.frag");
+                d16 = readAsset(assets, "mwsr/mwsr-down-16.frag");
+            } catch (IOException e) {
+                LimeLog.warning("GFN: Unable to read the MWSR shaders, using FSR: " + e);
+                vs = null;
+            }
+        }
+        this.mwsrVertexSource = vs;
+        this.mwsrUpSource = up;
+        this.mwsrDown4Source = d4;
+        this.mwsrDown9Source = d9;
+        this.mwsrDown16Source = d16;
 
         glThread = new HandlerThread("GFN-GL", Process.THREAD_PRIORITY_URGENT_DISPLAY);
         glThread.start();
@@ -275,8 +333,10 @@ public class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableListene
      */
     public static GlUpscaleRenderer create(Surface outputSurface, int outputWidth, int outputHeight,
                                            int streamWidth, int streamHeight,
-                                           float sharpness, boolean lowLatency) {
-        final GlUpscaleRenderer renderer = new GlUpscaleRenderer(streamWidth, streamHeight, sharpness, lowLatency);
+                                           float sharpness, boolean lowLatency,
+                                           AssetManager assets, int upscaler) {
+        final GlUpscaleRenderer renderer = new GlUpscaleRenderer(streamWidth, streamHeight, sharpness, lowLatency,
+                assets, upscaler == UPSCALER_MWSR);
         final boolean[] success = new boolean[1];
 
         renderer.runOnGlThread(() -> {
@@ -299,6 +359,23 @@ public class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableListene
     /** The surface MediaCodec should decode into. */
     public Surface getInputSurface() {
         return inputSurface;
+    }
+
+    /** One line for the performance overlay: whether and how the picture is upscaled. */
+    public String getStatusText() {
+        return statusText;
+    }
+
+    private static String readAsset(AssetManager assets, String name) throws IOException {
+        try (InputStream in = assets.open(name)) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = in.read(buffer)) > 0) {
+                out.write(buffer, 0, read);
+            }
+            return new String(out.toByteArray(), StandardCharsets.UTF_8);
+        }
     }
 
     /** Called when the SurfaceView changes size. */
@@ -438,6 +515,16 @@ public class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableListene
             return false;
         }
 
+        if (mwsrVertexSource != null) {
+            mwsrUpProgram = buildProgram(mwsrVertexSource, mwsrUpSource);
+            mwsrDown4Program = buildProgram(mwsrVertexSource, mwsrDown4Source);
+            mwsrDown9Program = buildProgram(mwsrVertexSource, mwsrDown9Source);
+            mwsrDown16Program = buildProgram(mwsrVertexSource, mwsrDown16Source);
+            if (mwsrUpProgram == 0) {
+                LimeLog.warning("GFN: MWSR shaders unavailable on this GPU, using FSR");
+            }
+        }
+
         positionBuffer = createFloatBuffer(QUAD_POSITIONS);
         texCoordBuffer = createFloatBuffer(QUAD_TEXCOORDS);
 
@@ -514,64 +601,149 @@ public class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableListene
                 (outW > streamWidth || outH > streamHeight);
         boolean oneToOne = outW == streamWidth && outH == streamHeight;
 
+        // MWSR handles both directions in one pass; at 1:1 only the sharpening applies
+        int mwsrProgram = oneToOne ? 0 : getMwsrProgram(outW, outH);
+
         if (!loggedMode) {
-            LimeLog.info("GFN: GL post-processing mode: " +
-                    (upscale ? "FSR EASU + RCAS" : (oneToOne ? "RCAS" : "bilinear")) +
+            String mode;
+            if (mwsrProgram != 0) {
+                mode = upscale ? "MWSR" : "MWSR reduction (" + MwsrLaw.taps(streamWidth, streamHeight, outW, outH) + " samples)";
+            }
+            else {
+                mode = upscale ? "FSR EASU + RCAS" : (oneToOne ? "RCAS" : "bilinear");
+            }
+            LimeLog.info("GFN: GL post-processing mode: " + mode +
                     " (" + streamWidth + "x" + streamHeight + " -> " + outW + "x" + outH + ")");
+            updateStatus(mwsrProgram != 0, upscale, oneToOne, outW, outH);
             loggedMode = true;
         }
 
-        // Pass 1: external OES texture -> RGB texture at stream resolution
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, sourceFbo);
-        GLES20.glViewport(0, 0, streamWidth, streamHeight);
-        drawTexturedQuad(copyProgram, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexture, texMatrix);
+        if (mwsrProgram != 0) {
+            // Pass 1: external OES texture -> RGB texture at stream resolution, first row = top
+            Matrix.multiplyMM(flippedTexMatrix, 0, texMatrix, 0, FLIP_Y_MATRIX, 0);
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, sourceFbo);
+            GLES20.glViewport(0, 0, streamWidth, streamHeight);
+            drawTexturedQuad(copyProgram, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexture, flippedTexMatrix);
 
-        int rcasInput = sourceTexture;
-
-        if (upscale) {
-            // Pass 2: FSR EASU to output resolution
-            if (!ensureUpscaledTarget(outW, outH)) {
-                return;
+            // Pass 2: MWSR straight into the window surface (full-screen triangle)
+            if (mwsrUniforms == null || mwsrUniformsOutW != outW || mwsrUniformsOutH != outH) {
+                mwsrUniforms = MwsrLaw.uniforms(streamWidth, streamHeight, outW, outH);
+                mwsrUniformsOutW = outW;
+                mwsrUniformsOutH = outH;
             }
 
-            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, upscaledFbo);
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
             GLES20.glViewport(0, 0, outW, outH);
-            GLES20.glUseProgram(easuProgram);
+            GLES20.glUseProgram(mwsrProgram);
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, sourceTexture);
-            GLES20.glUniform1i(GLES20.glGetUniformLocation(easuProgram, "uInput"), 0);
-            float scaleX = (float) streamWidth / outW;
-            float scaleY = (float) streamHeight / outH;
-            GLES20.glUniform4f(GLES20.glGetUniformLocation(easuProgram, "uCon0"),
-                    scaleX, scaleY, 0.5f * scaleX - 0.5f, 0.5f * scaleY - 0.5f);
-            GLES20.glUniform2i(GLES20.glGetUniformLocation(easuProgram, "uInputSize"), streamWidth, streamHeight);
-            drawQuad(easuProgram);
-
-            rcasInput = upscaledTexture;
-        }
-
-        // Pass 3: into the window surface
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
-        GLES20.glViewport(0, 0, outW, outH);
-
-        if (upscale || oneToOne) {
-            GLES20.glUseProgram(rcasProgram);
-            GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
-            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, rcasInput);
-            GLES20.glUniform1i(GLES20.glGetUniformLocation(rcasProgram, "uInput"), 0);
-            GLES20.glUniform1f(GLES20.glGetUniformLocation(rcasProgram, "uSharpness"), sharpness);
-            GLES20.glUniform2i(GLES20.glGetUniformLocation(rcasProgram, "uInputSize"),
-                    upscale ? outW : streamWidth, upscale ? outH : streamHeight);
-            drawQuad(rcasProgram);
+            GLES20.glUniform1i(GLES20.glGetUniformLocation(mwsrProgram, "uTex"), 0);
+            for (int i = 0; i < MWSR_UNIFORMS.length; i++) {
+                int loc = GLES20.glGetUniformLocation(mwsrProgram, MWSR_UNIFORMS[i]);
+                if (loc >= 0) {
+                    GLES20.glUniform4fv(loc, 1, mwsrUniforms, i * 4);
+                }
+            }
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, 3);
         }
         else {
-            // Downscaling: plain bilinear
-            drawTexturedQuad(copyRgbProgram, GLES20.GL_TEXTURE_2D, sourceTexture, IDENTITY_MATRIX);
+            // Pass 1: external OES texture -> RGB texture at stream resolution
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, sourceFbo);
+            GLES20.glViewport(0, 0, streamWidth, streamHeight);
+            drawTexturedQuad(copyProgram, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexture, texMatrix);
+
+            int rcasInput = sourceTexture;
+
+            if (upscale) {
+                // Pass 2: FSR EASU to output resolution
+                if (!ensureUpscaledTarget(outW, outH)) {
+                    return;
+                }
+
+                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, upscaledFbo);
+                GLES20.glViewport(0, 0, outW, outH);
+                GLES20.glUseProgram(easuProgram);
+                GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, sourceTexture);
+                GLES20.glUniform1i(GLES20.glGetUniformLocation(easuProgram, "uInput"), 0);
+                float scaleX = (float) streamWidth / outW;
+                float scaleY = (float) streamHeight / outH;
+                GLES20.glUniform4f(GLES20.glGetUniformLocation(easuProgram, "uCon0"),
+                        scaleX, scaleY, 0.5f * scaleX - 0.5f, 0.5f * scaleY - 0.5f);
+                GLES20.glUniform2i(GLES20.glGetUniformLocation(easuProgram, "uInputSize"), streamWidth, streamHeight);
+                drawQuad(easuProgram);
+
+                rcasInput = upscaledTexture;
+            }
+
+            // Pass 3: into the window surface
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+            GLES20.glViewport(0, 0, outW, outH);
+
+            if (upscale || oneToOne) {
+                GLES20.glUseProgram(rcasProgram);
+                GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, rcasInput);
+                GLES20.glUniform1i(GLES20.glGetUniformLocation(rcasProgram, "uInput"), 0);
+                GLES20.glUniform1f(GLES20.glGetUniformLocation(rcasProgram, "uSharpness"), sharpness);
+                GLES20.glUniform2i(GLES20.glGetUniformLocation(rcasProgram, "uInputSize"),
+                        upscale ? outW : streamWidth, upscale ? outH : streamHeight);
+                drawQuad(rcasProgram);
+            }
+            else {
+                // Downscaling: plain bilinear
+                drawTexturedQuad(copyRgbProgram, GLES20.GL_TEXTURE_2D, sourceTexture, IDENTITY_MATRIX);
+            }
         }
 
         if (!EGL14.eglSwapBuffers(eglDisplay, windowSurface)) {
             LimeLog.warning("GFN: eglSwapBuffers() failed: 0x" + Integer.toHexString(EGL14.eglGetError()));
         }
+    }
+
+    // The MWSR program for the current output size, or 0 if MWSR isn't used/available
+    private int getMwsrProgram(int outW, int outH) {
+        if (mwsrUpProgram == 0) {
+            return 0;
+        }
+
+        switch (MwsrLaw.mode(streamWidth, streamHeight, outW, outH)) {
+            case MwsrLaw.MODE_UP:
+                return mwsrUpProgram;
+            case MwsrLaw.MODE_DOWN:
+                switch (MwsrLaw.taps(streamWidth, streamHeight, outW, outH)) {
+                    case 4:
+                        return mwsrDown4Program;
+                    case 9:
+                        return mwsrDown9Program;
+                    default:
+                        return mwsrDown16Program;
+                }
+            default:
+                return 0;
+        }
+    }
+
+    private void updateStatus(boolean mwsr, boolean upscale, boolean oneToOne, int outW, int outH) {
+        String sizes = streamWidth + "x" + streamHeight + " \u2192 " + outW + "x" + outH;
+        int sharpnessPercent = Math.round(sharpness * 100);
+        String text;
+        if (mwsr) {
+            text = upscale ? "Bildverbesserung: MWSR " + sizes
+                           : "Bildverbesserung: MWSR verkleinert " + sizes;
+        }
+        else if (upscale) {
+            text = "Bildverbesserung: AMD FSR 1 " + sizes + ", Schärfe " + sharpnessPercent + " %";
+        }
+        else if (oneToOne) {
+            text = sharpnessPercent > 0
+                    ? "Bildverbesserung: nur Schärfe " + sharpnessPercent + " % (Stream = Bildschirm)"
+                    : "Bildverbesserung: aus (Stream = Bildschirm, Schärfe 0 %)";
+        }
+        else {
+            text = "Bildverbesserung: bilinear verkleinert " + sizes;
+        }
+        statusText = text;
     }
 
     private boolean ensureUpscaledTarget(int width, int height) {

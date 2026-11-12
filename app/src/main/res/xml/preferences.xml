@@ -61,6 +61,14 @@
             android:title="@string/title_checkbox_gfn_upscaling"
             android:summary="@string/summary_checkbox_gfn_upscaling"
             android:defaultValue="false" />
+        <ListPreference
+            android:key="list_gfn_upscaler"
+            android:dependency="checkbox_gfn_upscaling"
+            android:title="@string/title_list_gfn_upscaler"
+            android:summary="@string/summary_list_gfn_upscaler"
+            android:entries="@array/gfn_upscaler_names"
+            android:entryValues="@array/gfn_upscaler_values"
+            android:defaultValue="mwsr" />
         <com.limelight.preferences.SeekBarPreference
             android:key="seekbar_gfn_sharpness"
             android:dependency="checkbox_gfn_upscaling"

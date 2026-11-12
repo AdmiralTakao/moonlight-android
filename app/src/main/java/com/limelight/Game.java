@@ -2543,7 +2543,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 glUpscaleRenderer = GlUpscaleRenderer.create(holder.getSurface(), width, height,
                         prefConfig.width, prefConfig.height,
                         prefConfig.gfnSharpness / 100.0f,
-                        prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY);
+                        prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY,
+                        getAssets(), prefConfig.gfnUpscaler);
                 if (glUpscaleRenderer != null) {
                     decoderRenderer.setRenderSurfaceOverride(glUpscaleRenderer.getInputSurface());
                 }
@@ -2705,12 +2706,31 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
     @Override
     public void onPerfUpdate(final String text) {
+        // GFN fork: show whether and how the picture is upscaled on this device
+        final String overlayText = text + "\n" + getImageEnhancementStatus();
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                performanceOverlayView.setText(text);
+                performanceOverlayView.setText(overlayText);
             }
         });
+    }
+
+    // GFN fork: one line for the performance overlay
+    private String getImageEnhancementStatus() {
+        GlUpscaleRenderer renderer = glUpscaleRenderer;
+        if (renderer != null) {
+            return renderer.getStatusText();
+        }
+        else if (!prefConfig.gfnUpscaling) {
+            return "Bildverbesserung: aus (in den Einstellungen abgeschaltet)";
+        }
+        else if (prefConfig.enableHdr) {
+            return "Bildverbesserung: aus (nicht zusammen mit HDR)";
+        }
+        else {
+            return "Bildverbesserung: nicht verfügbar (OpenGL ES 3.0 fehlt)";
+        }
     }
 
     @Override

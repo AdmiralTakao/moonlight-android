@@ -313,8 +313,18 @@
     <string name="title_gfn_preset_quality">Profil: Qualität</string>
     <string name="summary_gfn_preset_quality">Bestes Bild: FSR-Upscaling, Schärfe 15 Prozent, flüssigste Bildausgabe</string>
     <string name="toast_gfn_preset_applied">Profil angewendet: %1$s</string>
-    <string name="title_checkbox_gfn_upscaling">Bildverbesserung: FSR-Upscaling + Schärfe (experimentell)</string>
-    <string name="summary_checkbox_gfn_upscaling">Rechnet den Stream mit AMD FSR auf die Bildschirmauflösung hoch und schärft nach. Nicht zusammen mit HDR. Kostet etwas GPU-Leistung und ca. 1 Frame Latenz.</string>
+    <string name="title_checkbox_gfn_upscaling">Bildverbesserung: Upscaling + Schärfe (experimentell)</string>
+    <string name="summary_checkbox_gfn_upscaling">Rechnet den Stream mit MWSR oder AMD FSR auf die Bildschirmauflösung um und schärft nach. Nicht zusammen mit HDR. Kostet etwas GPU-Leistung und ca. 1 Frame Latenz. Ob es greift, zeigt das Statistik-Overlay.</string>
+    <string name="title_list_gfn_upscaler">Upscaler</string>
+    <string name="summary_list_gfn_upscaler">MWSR (von linckosz/MoonlightWeb) braucht nur einen Durchgang, ist auf Handys mehrfach schneller als FSR und verkleinert auch sauber. Die Bildschärfe unten gilt nur für FSR und gleiche Auflösung.</string>
+    <string-array name="gfn_upscaler_names">
+        <item>MWSR (empfohlen)</item>
+        <item>AMD FSR 1</item>
+    </string-array>
+    <string-array name="gfn_upscaler_values" translatable="false">
+        <item>mwsr</item>
+        <item>fsr</item>
+    </string-array>
     <string name="title_seekbar_gfn_sharpness">Bildschärfe</string>
     <string name="summary_seekbar_gfn_sharpness">Stärke der Nachschärfung (0 = aus)</string>
     <string name="suffix_seekbar_gfn_sharpness">%</string>
