@@ -23,6 +23,7 @@ import com.limelight.preferences.StreamSettings;
 import com.limelight.ui.AdapterFragment;
 import com.limelight.ui.AdapterFragmentCallbacks;
 import com.limelight.utils.Dialog;
+import com.limelight.utils.GfnWakeHelper;
 import com.limelight.utils.HelpLauncher;
 import com.limelight.utils.ServerHelper;
 import com.limelight.utils.ShortcutHelper;
@@ -30,6 +31,7 @@ import com.limelight.utils.UiHelper;
 
 import android.app.Activity;
 import android.app.ActivityManager;
+import android.app.AlertDialog;
 import android.app.Service;
 import android.content.ComponentName;
 import android.content.Intent;
@@ -38,8 +40,11 @@ import android.content.res.Configuration;
 import android.opengl.GLSurfaceView;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.preference.PreferenceManager;
+import android.text.InputType;
 import android.view.ContextMenu;
 import android.view.Menu;
 import android.view.MenuItem;
@@ -49,6 +54,7 @@ import android.view.View.OnClickListener;
 import android.widget.AbsListView;
 import android.widget.AdapterView;
 import android.widget.AdapterView.OnItemClickListener;
+import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.RelativeLayout;
 import android.widget.Toast;
@@ -119,6 +125,14 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
     private final static int FULL_APP_LIST_ID = 9;
     private final static int TEST_NETWORK_ID = 10;
     private final static int GAMESTREAM_EOL_ID = 11;
+
+    // GFN fork: "Start mit einem Tipp"
+    private final static int GFN_WAKE_CONNECT_ID = 101;
+    private final static int GFN_WAKE_URL_ID = 102;
+    private final Handler gfnWakeHandler = new Handler(Looper.getMainLooper());
+    private AlertDialog gfnWakeDialog;
+    private String gfnWakeUuid;
+    private Runnable gfnWakePoll;
 
     private void initializeViews() {
         setContentView(R.layout.activity_pc_view);
@@ -316,6 +330,9 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
 
         inForeground = false;
         stopComputerUpdates(false);
+
+        // GFN fork: no polling in the background, so stop waiting for a woken PC
+        cancelWakeAndConnect();
     }
 
     @Override
@@ -359,6 +376,11 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
             computer.details.state == ComputerDetails.State.UNKNOWN) {
             menu.add(Menu.NONE, WOL_ID, 1, getResources().getString(R.string.pcview_menu_send_wol));
             menu.add(Menu.NONE, GAMESTREAM_EOL_ID, 2, getResources().getString(R.string.pcview_menu_eol));
+
+            // GFN fork: wake through the wake address and/or Wake-on-LAN, then connect
+            if (computer.details.macAddress != null || GfnWakeHelper.hasWakeUrl(this, computer.details.uuid)) {
+                menu.add(Menu.NONE, GFN_WAKE_CONNECT_ID, 1, "Wecken und verbinden");
+            }
         }
         else if (computer.details.pairState != PairState.PAIRED) {
             menu.add(Menu.NONE, PAIR_ID, 1, getResources().getString(R.string.pcview_menu_pair_pc));
@@ -382,6 +404,7 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
         menu.add(Menu.NONE, TEST_NETWORK_ID, 5, getResources().getString(R.string.pcview_menu_test_network));
         menu.add(Menu.NONE, DELETE_ID, 6, getResources().getString(R.string.pcview_menu_delete_pc));
         menu.add(Menu.NONE, VIEW_DETAILS_ID, 7,  getResources().getString(R.string.pcview_menu_details));
+        menu.add(Menu.NONE, GFN_WAKE_URL_ID, 8, "Weck-Adresse festlegen…");
     }
 
     @Override
@@ -675,11 +698,179 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
                 HelpLauncher.launchGameStreamEolFaq(PcView.this);
                 return true;
 
+            case GFN_WAKE_CONNECT_ID:
+                startWakeAndConnect(computer.details);
+                return true;
+
+            case GFN_WAKE_URL_ID:
+                showWakeUrlDialog(computer.details);
+                return true;
+
             default:
                 return super.onContextItemSelected(item);
         }
     }
     
+    // GFN fork: the current details of a PC in the list (kept up to date by the polling)
+    private ComputerDetails findComputer(String uuid) {
+        for (int i = 0; i < pcGridAdapter.getCount(); i++) {
+            ComputerObject computer = (ComputerObject) pcGridAdapter.getItem(i);
+            if (uuid.equals(computer.details.uuid)) {
+                return computer.details;
+            }
+        }
+        return null;
+    }
+
+    // GFN fork: calls the wake address and sends Wake-on-LAN, waits until the PC is online
+    // and then opens its app list (or pairs it)
+    private void startWakeAndConnect(final ComputerDetails computer) {
+        cancelWakeAndConnect();
+
+        final String uuid = computer.uuid;
+        final String name = computer.name;
+        final String wakeUrl = GfnWakeHelper.getWakeUrl(this, uuid);
+        final boolean hasMac = computer.macAddress != null;
+
+        if (wakeUrl.isEmpty() && !hasMac) {
+            Toast.makeText(this, getResources().getString(R.string.wol_no_mac), Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        final int[] elapsedSeconds = {0};
+        final String[] wakeMessage = {""};
+        final Runnable updateMessage = new Runnable() {
+            @Override
+            public void run() {
+                if (gfnWakeDialog != null && uuid.equals(gfnWakeUuid)) {
+                    gfnWakeDialog.setMessage(name + " wird geweckt… (" + elapsedSeconds[0] + " s)" +
+                            (wakeMessage[0].isEmpty() ? "" : "\n\n" + wakeMessage[0]) +
+                            "\n\nSobald der PC online ist, geht es automatisch weiter.");
+                }
+            }
+        };
+
+        gfnWakeUuid = uuid;
+        gfnWakeDialog = new AlertDialog.Builder(this)
+                .setTitle(name)
+                .setMessage(name + " wird geweckt…")
+                .setCancelable(true)
+                .setNegativeButton(android.R.string.cancel, (dialog, which) -> cancelWakeAndConnect())
+                .setOnCancelListener(dialog -> cancelWakeAndConnect())
+                .create();
+        gfnWakeDialog.show();
+
+        new Thread(() -> {
+            StringBuilder result = new StringBuilder();
+            if (!wakeUrl.isEmpty()) {
+                result.append(GfnWakeHelper.callWakeUrl(wakeUrl));
+            }
+            if (hasMac) {
+                if (result.length() > 0) {
+                    result.append('\n');
+                }
+                try {
+                    WakeOnLanSender.sendWolPacket(computer);
+                    result.append("Wake-on-LAN gesendet.");
+                } catch (IOException e) {
+                    result.append(getResources().getString(R.string.wol_fail));
+                }
+            }
+
+            runOnUiThread(() -> {
+                wakeMessage[0] = result.toString();
+                updateMessage.run();
+            });
+        }).start();
+
+        gfnWakePoll = new Runnable() {
+            @Override
+            public void run() {
+                if (gfnWakeDialog == null || !uuid.equals(gfnWakeUuid)) {
+                    return;
+                }
+
+                ComputerDetails current = findComputer(uuid);
+                if (current != null && current.state == ComputerDetails.State.ONLINE) {
+                    cancelWakeAndConnect();
+                    if (current.pairState != PairState.PAIRED) {
+                        doPair(current);
+                    }
+                    else {
+                        doAppList(current, false, false);
+                    }
+                    return;
+                }
+
+                elapsedSeconds[0]++;
+
+                if (elapsedSeconds[0] >= GfnWakeHelper.TIMEOUT_SECONDS) {
+                    gfnWakeDialog.setMessage(name + " ist nach " + GfnWakeHelper.TIMEOUT_SECONDS +
+                            " Sekunden nicht online gekommen." +
+                            (wakeMessage[0].isEmpty() ? "" : "\n\n" + wakeMessage[0]) +
+                            "\n\nPrüfe die Weck-Adresse, Wake-on-LAN im BIOS und ob die VPN-Verbindung (z. B. Tailscale) steht.");
+                    gfnWakePoll = null;
+                    return;
+                }
+
+                // Repeat Wake-on-LAN now and then; the wake address is only called once
+                if (hasMac && elapsedSeconds[0] % GfnWakeHelper.WOL_REPEAT_SECONDS == 0) {
+                    new Thread(() -> {
+                        try {
+                            WakeOnLanSender.sendWolPacket(computer);
+                        } catch (IOException ignored) {
+                        }
+                    }).start();
+                }
+
+                updateMessage.run();
+                gfnWakeHandler.postDelayed(this, 1000);
+            }
+        };
+        gfnWakeHandler.postDelayed(gfnWakePoll, 1000);
+    }
+
+    private void cancelWakeAndConnect() {
+        gfnWakeUuid = null;
+
+        if (gfnWakePoll != null) {
+            gfnWakeHandler.removeCallbacks(gfnWakePoll);
+            gfnWakePoll = null;
+        }
+
+        if (gfnWakeDialog != null) {
+            AlertDialog dialog = gfnWakeDialog;
+            gfnWakeDialog = null;
+            if (dialog.isShowing()) {
+                dialog.dismiss();
+            }
+        }
+    }
+
+    // GFN fork: per-PC wake address
+    private void showWakeUrlDialog(final ComputerDetails computer) {
+        final EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        input.setSingleLine(true);
+        input.setHint("http://…");
+        input.setText(GfnWakeHelper.getWakeUrl(this, computer.uuid));
+
+        new AlertDialog.Builder(this)
+                .setTitle("Weck-Adresse für " + computer.name)
+                .setMessage("Wird beim Antippen des ausgeschalteten PCs aufgerufen, danach wartet Moonlight, bis er online ist.\n\n" +
+                        "Shelly: http://192.168.178.50/relay/0?turn=on\n" +
+                        "Tasmota: http://192.168.178.51/cm?cmnd=Power%20On\n" +
+                        "UpSnap/Home Assistant: deren Weck-URL (für Webhooks „POST “ voranstellen)\n\n" +
+                        "Die Adresse muss von unterwegs erreichbar sein, z. B. über Tailscale.")
+                .setView(input)
+                .setPositiveButton("Speichern", (dialog, which) ->
+                        GfnWakeHelper.setWakeUrl(PcView.this, computer.uuid, input.getText().toString()))
+                .setNeutralButton("Entfernen", (dialog, which) ->
+                        GfnWakeHelper.setWakeUrl(PcView.this, computer.uuid, null))
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
     private void removeComputer(ComputerDetails details) {
         managerBinder.removeComputer(details);
 
@@ -754,7 +945,11 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
             public void onItemClick(AdapterView<?> arg0, View arg1, int pos,
                                     long id) {
                 ComputerObject computer = (ComputerObject) pcGridAdapter.getItem(pos);
-                if (computer.details.state == ComputerDetails.State.UNKNOWN ||
+                if (computer.details.state == ComputerDetails.State.OFFLINE &&
+                        GfnWakeHelper.hasWakeUrl(PcView.this, computer.details.uuid)) {
+                    // GFN fork: one tap wakes the PC through its wake address and connects
+                    startWakeAndConnect(computer.details);
+                } else if (computer.details.state == ComputerDetails.State.UNKNOWN ||
                     computer.details.state == ComputerDetails.State.OFFLINE) {
                     // Open the context menu if a PC is offline or refreshing
                     openContextMenu(arg1);
